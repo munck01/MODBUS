@@ -1,6 +1,7 @@
 from pymodbus.client import ModbusTcpClient
 from time import sleep
 
+
 class ClienteMODBUS():
     """
     Classe Cliente MODBUS usando pymodbus
@@ -25,7 +26,7 @@ class ClienteMODBUS():
                 sel = input("Deseja realizar uma leitura, escrita ou configuração? (1- Leitura | 2- Escrita | 3- Configuração | 4- Sair): ")
 
                 if sel == '1':
-                    tipo = input("""Qual tipo de dado deseja ler? (1- Holding Register | 2- Coil | 3- Input Register | 4- Discrete Input): """)
+                    tipo = input("""Qual tipo de dado deseja ler? (1- Holding Register | 2- Holding Register (DIGITAL) | 3- Coil | 4- Input Register | 5- Discrete Input): """)
                     addr = input("Digite o endereço da tabela MODBUS: ")
                     nvezes = input("Digite o número de vezes que deseja ler: ")
                     for i in range(0, int(nvezes)):
@@ -33,13 +34,17 @@ class ClienteMODBUS():
                         sleep(self._scan_time)
 
                 elif sel == '2':
-                    tipo = input("""Qual tipo de dado deseja escrever? (1- Holding Register | 2- Coil): """)
+                    tipo = input("""Qual tipo de dado deseja escrever? (1- Holding Register | 2- Holding Register(DIGITAL) | 3- Coil): """)
+                    if int(tipo) == 2:
+                        posicao = input("Digite a posição do dado a ser escrito (0 a 15)")
+                    else: posicao = 0
+
                     addr = input("Digite o endereço da tabela MODBUS: ")
                     valor = input("Digite o valor que deseja escrever: ")
-                    if addr not in [1, 2]:
-                        ok = self.escreveDado(int(tipo), int(addr), int(valor))
+                    if int(addr) not in [1, 2]:
+                        ok = self.escreveDado(int(tipo), int(addr), int(valor), int(posicao))
                     else: 
-                        ok = self.escreveDado(int(tipo), int(addr), float(valor))
+                        ok = self.escreveDado(int(tipo), int(addr), float(valor), int(posicao))
                     
                     print("Escrita realizada." if ok else "Falha na escrita.")
 
@@ -64,7 +69,8 @@ class ClienteMODBUS():
 
         Registradores 1 e 2 exclusivos para float
         """
-        # Holding Register (função 03)
+        
+        # Holding Register
         if tipo == 1:
             if addr not in [1, 2]:
                 resp = self._cliente.read_holding_registers(address=addr, count=1, device_id=1)
@@ -72,28 +78,43 @@ class ClienteMODBUS():
                     return resp.registers[0]
                 return None
             else: 
+                # Read
                 resp = self._cliente.read_holding_registers(address=1, count=2, device_id=1)
+                valor = self._cliente.convert_from_registers(
+                    resp.registers,
+                    data_type=self._cliente.DATATYPE.FLOAT32,
+                )
                 if resp and not resp.isError():
-                    return (resp[0] << 16) | resp[1]
+                    return valor
                 return None
-                
+        
+        # Holding Register (DIGITAL)
+        if tipo == 2:
+                resp = self._cliente.read_holding_registers(address=addr, count=1, device_id=1)
+                valor = self._cliente.convert_from_registers(
+                    resp.registers,
+                    data_type=self._cliente.DATATYPE.BITS,
+                    )
+                if resp and not resp.isError():
+                    return valor
+                return None       
 
         # Coil (função 01)
-        if tipo == 2:
+        if tipo == 3:
             resp = self._cliente.read_coils(address=addr, count=1, device_id=1)
             if resp and not resp.isError():
                 return resp.bits[0]
             return None
 
         # Input Register (função 04)
-        if tipo == 3:
+        if tipo == 4:
             resp = self._cliente.read_input_registers(address=addr, count=1, device_id=1)
             if resp and not resp.isError():
                 return resp.registers[0]
             return None
 
         # Discrete Input (função 02)
-        if tipo == 4:
+        if tipo == 5:
             resp = self._cliente.read_discrete_inputs(address=addr, count=1, device_id=1)
             if resp and not resp.isError():
                 return resp.bits[0]
@@ -102,7 +123,7 @@ class ClienteMODBUS():
         # Tipo inválido
         return None
 
-    def escreveDado(self, tipo, addr, valor):
+    def escreveDado(self, tipo, addr, valor, posicao):
         """
         Método para a escrita de dados na Tabela MODBUS
         Retorna True em caso de sucesso, False em caso de falha.
@@ -110,18 +131,40 @@ class ClienteMODBUS():
         Registradores 1 e 2 exclusivos para float
         """
         # Holding Register (função 06 - single)
+        
         if tipo == 1:
-            if addr not in [1, 2]:
+            if int(addr) not in [1, 2]:
                 resp = self._cliente.write_register(address=addr, value=valor, device_id=1)
                 return bool(resp and not resp.isError())
             else:
-                reg1 = (int(valor) >> 16) & 0xFFFF
-                reg2 = valor & 0xFFFF
-                resp = self._cliente.write_registers(address=1, value=[reg1,reg2], device_id=1)
+                # Write
+                regs = self._cliente.convert_to_registers(
+                    valor,
+                    data_type=self._cliente.DATATYPE.FLOAT32,
+                )
+                resp = self._cliente.write_registers(address=1, values = regs, device_id=1)
+                return bool(resp and not resp.isError())
+        
+        if tipo == 2:
+                
+                resp = self._cliente.read_holding_registers(address=addr, count=1, device_id=1)
+                leitura = self._cliente.convert_from_registers(
+                    resp.registers,
+                    data_type=self._cliente.DATATYPE.BITS
+                    )
+                leitura[posicao] = bool(valor)
+                print(leitura)
+                escrita = self._cliente.convert_to_registers(
+                    leitura,
+                    data_type=self._cliente.DATATYPE.BITS
+                    )
+                print(escrita)
+                resp = self._cliente.write_registers(address=addr, values = escrita, device_id=1)
                 return bool(resp and not resp.isError())
 
+        
         # Coil (função 05 - single)
-        if tipo == 2:
+        if tipo == 3:
             # Em coils, valor esperado é 0/1 (False/True)
             resp = self._cliente.write_coil(address=addr, value=bool(valor), device_id=1)
             return bool(resp and not resp.isError())
